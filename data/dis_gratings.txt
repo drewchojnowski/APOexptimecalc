@@ -1,0 +1,17 @@
+# wavecent: angstroms
+# dispersion: angstroms/pixel
+# coverage: angstroms
+# platescale: arcseconds/pixel
+# readnoise: e
+# gain: e/DN
+grating wavecent    dispersion   coverage   platescale readnoise gain
+B300     4500.0       2.42        4840.0        0.40     4.9     1.68
+B400     4400.0       1.83        3660.0        0.40     4.9     1.68
+B600     4400.0       1.22        2440.0        0.40     4.9     1.68
+B1200    4400.0       0.62        1240.0        0.40     4.9     1.68
+B1000    4400.0       0.74        1480.0        0.40     4.9     1.68
+R150     7705.0       4.56        9120.0        0.42     4.6     1.88
+R300     7500.0       2.31        4620.0        0.42     4.6     1.88
+R300H    7600.0       2.31        4620.0        0.42     4.6     1.88
+R830     7300.0       0.84        1680.0        0.42     4.6     1.88
+R1200    7300.0       0.58        1160.0        0.42     4.6     1.88

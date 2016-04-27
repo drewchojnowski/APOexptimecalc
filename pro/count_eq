@@ -1,0 +1,7 @@
+def phot_count(diameter,central_wavelength,mag,q,a,bandpass):
+    #Using the basic count equation discussed in class
+    #Assuming a function to calculate telescope area called telescope_area()
+    #Need a function for calculating the photon flux. Change variables once I know what it is
+    #Multiplying by the bandpass assumes a square-shaped bandpass. Update that later
+    ph_per_sec = telescope_area(diameter)*ph_flux(central_wavelength,flux(mag))*inst_transmission(q)*atm_transmission(a)*bandpass
+    print "Your photon count rate is", ph_per_sec, "ph/s"

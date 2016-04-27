@@ -1,0 +1,15 @@
+4/27/16 Update:
+
+Executive decisions by Drew:
+1. Users are required to supply a *V-band* magnitude
+2. For moon phase, users are required to supply a value between 0 and 14, indicating the numbers of days since new moon.
+
+Things that currently work:
+- optional user input
+- establishment of some instrument paramaters, depending on instrument choice
+- blackbody calculator
+- interpolator
+- mirror throughput calculation
+
+Things that currently don't work:
+- everything else

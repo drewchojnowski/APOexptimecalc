@@ -1,0 +1,13 @@
+# this is a table of wavelength (angstroms) and reflectivity of aluminum (%)
+# https://laserbeamproducts.wordpress.com/2014/06/19/reflectivity-of-aluminium-uv-visible-and-infrared/
+wavelength              reflectivity
+2480                      92.6
+4000                      92.0
+5320                      91.6
+6330                      90.7
+8000                      86.8
+9000                      89.0
+10000                     94.0
+30000                     98.0
+106000                    98.7
+
