@@ -19,7 +19,6 @@ dis_grating_file='data/dis_gratings.txt'
 
 #bandpasses = {'U':(3000,4500,3656),'B':(3500,6000,4353),'V':(4500,7500,5477),'R':(5000,9500,6349),'I':(6500,12500,8797)}
 
-
 #################################################################################################
 '''
 The main code
@@ -39,9 +38,27 @@ def exptimecalc(instr=None,grating=None,mag=None,snr=100.0,teff=None,filt=None,w
 
     # get a flux-calibrated blackbody of target, based on V mag, teff, and vega spectrum
     wave,objflux = get_blackbody_flux(teff=teff,mag=mag,w1=w1,w2=w2,wcent=wcent)
+    objflux=(objflux*wave)/(h*(c*10**8))
+    objflux=np.sum(objflux)
 
     # get the throughput of 3 aluminum mirros
     mirror_throughput = get_mirror_throughput(w1=w1,w2=w2)
+
+    # get the collecting area (in angstroms currently... maybe should be in m)
+    collecting_area=get_collecting_area()
+
+    # get the filter transmission for arctic
+    if instr=='arctic':
+        filter_transmission=get_filter_transmission(w1=w1,w2=w2)
+
+    # get the mean extinction
+    extinction=get_mean_extinction(w1=w1,w2=w2,airmass=airmass)
+
+    sys_eff=get_sys_eff()
+    atm_trans=get_atm_trans()
+    background=get_background()
+
+    signal=do_count_equation(objflux=objflux,collecting_area=collecting_area,sys_eff=sys_eff,atm_trans=atm_trans)
 
     exptime='???????'
 
@@ -53,7 +70,7 @@ def exptimecalc(instr=None,grating=None,mag=None,snr=100.0,teff=None,filt=None,w
     print('instrument on the APO 3.5m telescope is:')
     print('\n'+exptime+' seconds')
 
-    return instr
+    return collecting_area
 
 
 #################################################################################################
@@ -66,6 +83,70 @@ with the following message.
 def exit_code():
     sys.exit('Exiting the APO exposure time calculator.')
 
+#################################################################################################
+'''
+Do count equation
+'''
+def do_count_equation(objflux=None,collecting_area=None,sys_eff=None,atm_trans=None):
+    signal=collecting_area*atm_trans*sys_eff*objflux
+
+
+    return signal
+
+#################################################################################################
+'''
+Get system efficiency
+'''
+def get_sys_eff():
+
+    return 0.5
+
+
+#################################################################################################
+'''
+Get atmospheric transmission
+'''
+def get_atm_trans():
+
+    return 0.8
+
+#################################################################################################
+'''
+Get background
+'''
+def get_background():
+
+    return 0.8
+
+#################################################################################################
+'''
+Get collecting area
+'''
+def get_collecting_area():
+    central_hole=0.77e10 #angstroms
+    primary_mirror=3.5e10 #angstroms
+
+    area=(math.pi*(primary_mirror/2.)**2.0)-(math.pi*(central_hole/2.)**2.0)
+
+    return area
+
+#################################################################################################
+'''
+Get atmospheric extinction
+'''
+def get_mean_extinction(w1=None,w2=None,airmass=None):
+    # need the mean extinction curve (dead linke in DIS manual)
+
+    return 0.99
+
+#################################################################################################
+'''
+Get filter transmission
+'''
+def get_filter_transmission(w1=None,w2=None):
+    # need the filter transmission curves
+
+    return 0.99
 
 #################################################################################################
 '''
@@ -109,7 +190,7 @@ def get_instr_params(instr=None,grating=None):
             a = raw_input('')
             if a=='':  a='1'
             if a=='q': exit_code()
-            grating=disgratings[int(a)]
+            grating=disgratings[int(a)-1]
         print('Ok, you are using '+grating+'.')
         
 
@@ -119,6 +200,9 @@ def get_instr_params(instr=None,grating=None):
         gain=distable['gain'][gd]
         readnoise=distable['readnoise'][gd]
         platescale=distable['platescale'][gd]
+        gain=gain.tolist(); gain=gain[0]
+        readnoise=readnoise.tolist(); readnoise=readnoise[0]
+        platescale=platescale.tolist(); platescale=platescale[0]
 
     print('Ok. gain = '+str(gain)+', readnoise='+str(readnoise)+', platescale='+str(platescale)+'.')
 
