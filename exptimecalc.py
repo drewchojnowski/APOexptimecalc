@@ -1,5 +1,6 @@
 import numpy as np
 import math
+import glob
 from astropy.io import ascii
 from astropy import constants as const
 from astropy import units as u
@@ -17,20 +18,34 @@ al_reflect_file='data/al_reflectivity.txt'
 # DIS info from http://www.apo.nmsu.edu/arc35m/Instruments/DIS/#7
 dis_grating_file='data/dis_gratings.txt'
 
-#bandpasses = {'U':(3000,4500,3656),'B':(3500,6000,4353),'V':(4500,7500,5477),'R':(5000,9500,6349),'I':(6500,12500,8797)}
+# Atmospheric extinction file from Jon
+atmos_extinct_file='data/atmosphere.dat'
+
+# DIS detector quantum efficiency
+qe_disR_file='data/QE_dis_red'
+qe_disB_file='data/QE_dis_blue'
+
+# ARCTIC detector quantum efficiency
+qe_arctic_file='data/QE_arctic'
 
 #################################################################################################
 '''
 The main code
 '''
-def exptimecalc(instr=None,grating=None,mag=None,snr=100.0,teff=None,filt=None,wcent=6250.0,wspan=750.0,
+def exptimecalc(instr=None,grating=None,mag=None,snr=100.0,teff=None,filt=None,wcent=5500.0,wspan=100.0,
                 seeing=None,airmass=None,moonphase=None):
 
     # get wavelength limits based on center and span
-    w1 = wcent-(wspan/2.); w2 = wcent+(wspan/2.)
+    w1 = wcent-(wspan/2.)
+    w2 = wcent+(wspan/2.)
+
+    # get the telescope collecting area (in angstroms currently... maybe should be in m)
+    collecting_area = get_collecting_area()
 
     # get instrument parameters if not already supplied
-    instr,gain,readnoise,platescale = get_instr_params(instr=instr,grating=grating)
+    instrinfo = get_instr_params(instr=instr,grating=grating,filt=filt)
+    instr=instrinfo[0]; grating=instrinfo[1]; filt=instrinfo[2]
+    gain=instrinfo[3]; readnoise=instrinfo[4]; platescale=instrinfo[5]
 
     # get parameters specific to object & observing conditions
     obsinfo=get_obsinfo(mag=mag,teff=teff,seeing=seeing,airmass=airmass,moonphase=moonphase)
@@ -38,27 +53,24 @@ def exptimecalc(instr=None,grating=None,mag=None,snr=100.0,teff=None,filt=None,w
 
     # get a flux-calibrated blackbody of target, based on V mag, teff, and vega spectrum
     wave,objflux = get_blackbody_flux(teff=teff,mag=mag,w1=w1,w2=w2,wcent=wcent)
-    objflux=(objflux*wave)/(h*(c*10**8))
-    objflux=np.sum(objflux)
+#    objflux=(objflux*wave)/(h*(c*10**8))
 
     # get the throughput of 3 aluminum mirros
-    mirror_throughput = get_mirror_throughput(w1=w1,w2=w2)
-
-    # get the collecting area (in angstroms currently... maybe should be in m)
-    collecting_area=get_collecting_area()
+    mirror_wave,mirror_trans = get_mirror_throughput(w1=w1,w2=w2)
 
     # get the filter transmission for arctic
     if instr=='arctic':
-        filter_transmission=get_filter_transmission(w1=w1,w2=w2)
+        filt_wave,filt_trans = get_filter_transmission(filt=filt,w1=w1,w2=w2)
+
+    # get the quantum efficiency
+    qe_wave,qe = get_qe(instr=instr,grating=grating,w1=w1,w2=w2)
 
     # get the mean extinction
-    extinction=get_mean_extinction(w1=w1,w2=w2,airmass=airmass)
+    atmos_wave,atmos_extinct = get_mean_extinction(w1=w1,w2=w2,airmass=airmass)
 
-    sys_eff=get_sys_eff()
-    atm_trans=get_atm_trans()
-    background=get_background()
+#    sys_eff = get_sys_eff()
 
-    signal=do_count_equation(objflux=objflux,collecting_area=collecting_area,sys_eff=sys_eff,atm_trans=atm_trans)
+#    signal=do_count_equation(objflux=objflux,collecting_area=collecting_area,sys_eff=sys_eff,atm_trans=atm_trans)
 
     exptime='???????'
 
@@ -70,7 +82,7 @@ def exptimecalc(instr=None,grating=None,mag=None,snr=100.0,teff=None,filt=None,w
     print('instrument on the APO 3.5m telescope is:')
     print('\n'+exptime+' seconds')
 
-    return collecting_area
+    return wave,objflux,atmos_wave,atmos_extinct
 
 
 #################################################################################################
@@ -83,40 +95,6 @@ with the following message.
 def exit_code():
     sys.exit('Exiting the APO exposure time calculator.')
 
-#################################################################################################
-'''
-Do count equation
-'''
-def do_count_equation(objflux=None,collecting_area=None,sys_eff=None,atm_trans=None):
-    signal=collecting_area*atm_trans*sys_eff*objflux
-
-
-    return signal
-
-#################################################################################################
-'''
-Get system efficiency
-'''
-def get_sys_eff():
-
-    return 0.5
-
-
-#################################################################################################
-'''
-Get atmospheric transmission
-'''
-def get_atm_trans():
-
-    return 0.8
-
-#################################################################################################
-'''
-Get background
-'''
-def get_background():
-
-    return 0.8
 
 #################################################################################################
 '''
@@ -130,29 +108,148 @@ def get_collecting_area():
 
     return area
 
+
 #################################################################################################
 '''
 Get atmospheric extinction
 '''
 def get_mean_extinction(w1=None,w2=None,airmass=None):
-    # need the mean extinction curve (dead linke in DIS manual)
+    # read in the atmosphere.dat file from Jon
+    extinctdata=ascii.read(atmos_extinct_file)
+    ext_wave,ext = interp(extinctdata['wavelength'],extinctdata['extinction'])
 
-    return 0.99
+    # restrict to the specified wavelength limits
+    gd=np.where((ext_wave>=w1) & (ext_wave<w2))
+    if len(gd[0])==0:
+        print('There is an error in get_mean_extinction.')
+        exit_code()
+    else:
+        ext_wave=ext_wave[gd]; ext=ext[gd]
+
+    return ext_wave,ext
+
 
 #################################################################################################
 '''
 Get filter transmission
 '''
-def get_filter_transmission(w1=None,w2=None):
-    # need the filter transmission curves
+def get_filter_transmission(filt=None,w1=None,w2=None):
+    # read in the filter transmission curve
+    filtfile='data/filt_'+filt
+    filtdata=ascii.read(filtfile)
 
-    return 0.99
+    # get the interpolated arrays
+    filt_wave,filt_trans = interp(filtdata['wavelength'],filtdata['transmission'])
+
+    # restrict to the specified wavelength limits
+    gd=np.where((filt_wave>=w1) & (filt_wave<w2))
+    if len(gd[0])==0:
+        print('\n'+'*'*70)
+        print('There is an error in get_filter_transmission.')
+        exit_code()
+    else:
+        filt_wave=filt_wave[gd]; filt_trans=filt_trans[gd]
+
+    return filt_wave,filt_trans
+
 
 #################################################################################################
 '''
-Get Instrument parameters (gain, readnoise, and platescale)
+Get detector quantum efficiency
 '''
-def get_instr_params(instr=None,grating=None):
+def get_qe(instr=None,grating=None,w1=None,w2=None):
+    # figure out which qe file to read in
+    if instr=='dis':
+        tmp=grating[:1].lower()
+        if tmp=='r': qedata=ascii.read(qe_disR_file)
+        if tmp=='b': qedata=ascii.read(qe_disB_file)
+    if instr=='arctic': qedata=ascii.read(qe_arctic_file)
+
+    # get the interpolated arrays
+    qe_wave,qe = interp(qedata['wavelength'],qedata['qe'])
+
+    # restrict to the specified wavelength limits
+    gd=np.where((qe_wave>=w1) & (qe_wave<w2))
+    if len(gd[0])==0:
+        print('\n'+'*'*70)
+        print('There is an error in get_qe.')
+        exit_code()
+    else:
+        qe_wave=qe_wave[gd]; qe=qe[gd]
+
+    return qe_wave,qe
+
+
+#################################################################################################
+'''
+Calculates reflectivity of mirrors as a function of wavelength.
+Returns: Transmission of mirrors
+'''
+
+def get_mirror_throughput(w1=None,w2=None):
+    # read in the file of aluminum reflectivity
+    aldata = ascii.read(al_reflect_file)
+
+    # get interpolated arrays of wavelength and reflectivity
+    # reflectivity is given in percentage, so divide by 100
+    alwave,alreflect = interp(aldata['wavelength'],aldata['reflectivity']/100.)
+
+    # To the third power - for each of the three mirrors on the 3.5m
+    alreflect=alreflect**3.0
+
+    # restrict to the specified wavelength limits
+    gd=np.where((alwave>=w1) & (alwave<w2))
+    if len(gd[0])==0:
+        print('\n'+'*'*70)
+        print('There is an error in get_mirror_throughput.')
+        exit_code()
+    else:
+        alwave=alwave[gd]; alreflect=alreflect[gd]
+
+    return alwave,alreflect
+
+
+#################################################################################################
+'''
+Blackbody calculator
+
+   Inputs:  Target's effective temperature and magnitude at a specific wavelength, the 
+            desired bandpass, and a reference flux.
+   Ouputs:  Array of wavelengths within the bandpass and the corresponding fluxes.
+'''
+def get_blackbody_flux(teff=None,mag=None,filt=None,w1=None,w2=None,wcent=None):
+    h = const.h.cgs.value
+    c = const.c.cgs.value
+    k = const.k_B.cgs.value
+
+    # read in the vega spectrum
+    vega = ascii.read(vega_spec_file)
+    wvega = np.array(vega['wavelength'])
+    fvega = np.array(vega['flux'])
+    # get the vega flux at wcent
+    gd = np.where((wvega>wcent-0.6) & (wvega<wcent+0.6))
+    fvega_gd = fvega[gd][0]
+
+    abscenter = fvega_gd*10.0**(-0.4*mag)
+
+    wave = np.arange(w1,w2)
+    modwave = wave*1e-8
+    unflux = (2.0*h*c**2/modwave**5) * (np.exp(h*c/(modwave*k*teff))-1.0)**(-1)
+
+    pairs = dict(zip(wave,unflux))                # combines two lists into dictionary
+    uncenter = pairs[wcent]                      # unnormalized flux at band's central wavelength
+    N = abscenter/uncenter                        # normalization constant
+    objflux = N*unflux                           # normalized flux curve
+
+
+    return wave,objflux
+
+
+#################################################################################################
+'''
+Get Instrument parameters (grating, filter, gain, readnoise, and platescale)
+'''
+def get_instr_params(instr=None,grating=None,filt=None):
     # establish instrument if not specified
     print('='*70)
     print('* Which instrument are you using?')
@@ -171,6 +268,32 @@ def get_instr_params(instr=None,grating=None):
         gain=2.0
         readnoise=3.7
         platescale=0.228 # (arcseconds/pixel)
+
+        if filt is not None:
+            tmp='data/filt_'+filt
+            filtfile=glob.glob(tmp)
+            if len(filtfile)==0:
+                print('A transmission curve file ('+tmp+') was not found for the specified filter.')
+                exit_code()
+        else:
+            filt_files=np.array(glob.glob('data/filt_*'))
+            nfilt=len(filt_files)
+            print('='*70)
+            print('* Which ARCTIC filter are you using?')
+            tmpfilt=[]
+            for i in range(nfilt):
+                bla=filt_files[i].split('_'); tmpfilt.append(bla[len(bla)-1])
+                if i==0: 
+                    print(' - enter '+str(i+1)+' for '+tmpfilt[i]+' (default)')
+                else:
+                    print(' - enter '+str(i+1)+' for '+tmpfilt[i])
+            tmpfilt=np.array(tmpfilt)
+            a = raw_input('')
+            if a=='':  a='1'
+            if a=='q': exit_code()
+            filt=tmpfilt[int(a)-1]
+        print('Ok, you are using the '+filt+' filter.')
+
 
     # get dis parameters - more complicated, in case other info from DIS grating table is needed.
     if instr=='dis':
@@ -206,7 +329,7 @@ def get_instr_params(instr=None,grating=None):
 
     print('Ok. gain = '+str(gain)+', readnoise='+str(readnoise)+', platescale='+str(platescale)+'.')
 
-    return instr,gain,readnoise,platescale
+    return instr,grating,filt,gain,readnoise,platescale
 
 
 #################################################################################################
@@ -285,40 +408,6 @@ def get_obsinfo(mag=None,teff=None,seeing=None,airmass=None,moonphase=None):
     return mag,teff,airmass,seeing,moonphase
 
 
-#################################################################################################
-'''
-Blackbody calculator
-
-   Inputs:  Target's effective temperature and magnitude at a specific wavelength, the 
-            desired bandpass, and a reference flux.
-   Ouputs:  Array of wavelengths within the bandpass and the corresponding fluxes.
-'''
-def get_blackbody_flux(teff=None,mag=None,filt=None,w1=None,w2=None,wcent=None):
-    h = const.h.cgs.value
-    c = const.c.cgs.value
-    k = const.k_B.cgs.value
-
-    # read in the vega spectrum
-    vega = ascii.read(vega_spec_file)
-    wvega = np.array(vega['wavelength'])
-    fvega = np.array(vega['flux'])
-    # get the vega flux at wcent
-    gd = np.where((wvega>wcent-0.6) & (wvega<wcent+0.6))
-    fvega_gd = fvega[gd][0]
-
-    abscenter = fvega_gd*10.0**(-0.4*mag)
-
-    wave = np.arange(w1,w2)
-    modwave = wave*1e-8
-    unflux = (2.0*h*c**2/modwave**5) * (np.exp(h*c/(modwave*k*teff))-1.0)**(-1)
-
-    pairs = dict(zip(wave,unflux))                # combines two lists into dictionary
-    uncenter = pairs[wcent]                      # unnormalized flux at band's central wavelength
-    N = abscenter/uncenter                        # normalization constant
-    objflux = N*unflux                           # normalized flux curve
-
-    return wave,objflux
-
 
 #################################################################################################
 '''
@@ -331,6 +420,8 @@ def interp(inx,iny):
 
     return outx,outy
 
+
+
 #################################################################################################
 #################################################################################################
 #################################################################################################
@@ -342,38 +433,13 @@ def interp(inx,iny):
 
 #################################################################################################
 '''
-Calculates reflectivity of mirrors as a function of wavelength.
-Returns: Transmission of mirrors
+Do count equation
 '''
-
-def get_mirror_throughput(w1=None,w2=None):
-    # read in the file of aluminum reflectivity
-    aldata = ascii.read(al_reflect_file)
-    # get interpolated arrays of wavelength and reflectivity
-    # reflectivity is given in percentage, so divide by 100
-    alwave,alreflect = interp(aldata['wavelength'],aldata['reflectivity']/100.)
-
-    # restrict to the specified wavelength limits
-    gd=np.where((alwave>w1) & (alwave<w2))
-    if len(gd[0])<2:
-        print('There is an error in mirror relectivity calculation.')
-        exit_code()
-    mirror_throughput=np.mean(alreflect[gd])
-    # To the third power - for each of the three mirrors on the 3.5m
-    mirror_throughput=mirror_throughput**3.0
-
-    return mirror_throughput
+def do_count_equation(objflux=None,collecting_area=None,sys_eff=None,atm_trans=None):
+    signal=collecting_area*atm_trans*sys_eff*objflux
 
 
-#################################################################################################
-'''
-Returns: filter transmission as a function of wavelength.
-'''
-def get_filter_throughput():
-    filterdata = ascii.read(filterfile)
-    filtwave,filtbla = interp(filterdata['wavelength'],filterdata['?'])
-
-    return filter_throughput
+    return signal
 
 
 #################################################################################################
