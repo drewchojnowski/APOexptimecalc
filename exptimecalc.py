@@ -28,18 +28,19 @@ qe_disB_file='data/QE_dis_blue'
 # ARCTIC detector quantum efficiency
 qe_arctic_file='data/QE_arctic'
 
-#################################################################################################
+################################################################################
 '''
 The main code
 '''
-def exptimecalc(instr=None,grating=None,mag=None,snr=100.0,teff=None,filt=None,wcent=5500.0,wspan=100.0,
-                seeing=None,airmass=None,moonphase=None):
+def exptimecalc(instr=None,grating=None,mag=None,snr=100.0,exptime=None,
+                teff=None,filt=None,wcent=5500.0,wspan=100.0,seeing=None,
+                airmass=None,moonphase=None):
 
     # get wavelength limits based on center and span
     w1 = wcent-(wspan/2.)
     w2 = wcent+(wspan/2.)
 
-    # get the telescope collecting area (in angstroms currently... maybe should be in m)
+    # get the telescope collecting area (in angstroms... maybe should be in m)
     collecting_area = get_collecting_area()
 
     # get instrument parameters if not already supplied
@@ -48,11 +49,12 @@ def exptimecalc(instr=None,grating=None,mag=None,snr=100.0,teff=None,filt=None,w
     gain=instrinfo[3]; readnoise=instrinfo[4]; platescale=instrinfo[5]
 
     # get parameters specific to object & observing conditions
-    obsinfo=get_obsinfo(mag=mag,teff=teff,seeing=seeing,airmass=airmass,moonphase=moonphase)
-    mag=obsinfo[0]; teff=obsinfo[1]; seeing=obsinfo[2]; airmass=obsinfo[3]; moonphase=obsinfo[4]
+    obsinfo=get_obsinfo(mag,teff,seeing,airmass,moonphase)
+    mag=obsinfo[0]; teff=obsinfo[1]; airmass=obsinfo[2]; seeing=obsinfo[3]
+    moonphase=obsinfo[4]
 
-    # get a flux-calibrated blackbody of target, based on V mag, teff, and vega spectrum
-    wave,objflux = get_blackbody_flux(teff=teff,mag=mag,w1=w1,w2=w2,wcent=wcent)
+    # get a flux-calibrated blackbody, based on V mag, teff, and vega spectrum
+    wave,objflux,wvega,fvega = get_blackbody_flux(teff=teff,mag=mag,w1=w1,w2=w2,wcent=wcent)
 #    objflux=(objflux*wave)/(h*(c*10**8))
 
     # get the throughput of 3 aluminum mirros
@@ -65,12 +67,20 @@ def exptimecalc(instr=None,grating=None,mag=None,snr=100.0,teff=None,filt=None,w
     # get the quantum efficiency
     qe_wave,qe = get_qe(instr=instr,grating=grating,w1=w1,w2=w2)
 
+    print('*'*80)
+    print(airmass)
+    print('*'*80)
     # get the mean extinction
     atmos_wave,atmos_extinct = get_mean_extinction(w1=w1,w2=w2,airmass=airmass)
 
+    flux_extinct=objflux*(10**(-0.4*atmos_extinct))
+    fcor=(flux_extinct/objflux)
+
 #    sys_eff = get_sys_eff()
 
-#    signal=do_count_equation(objflux=objflux,collecting_area=collecting_area,sys_eff=sys_eff,atm_trans=atm_trans)
+    if instr=='dis': filt_trans=None
+#    signal=do_count_equation(wave,objflux,collecting_area,mirror_trans,
+#                             atmos_extinct,qe,filt_trans)
 
     exptime='???????'
 
@@ -82,10 +92,20 @@ def exptimecalc(instr=None,grating=None,mag=None,snr=100.0,teff=None,filt=None,w
     print('instrument on the APO 3.5m telescope is:')
     print('\n'+exptime+' seconds')
 
-    return wave,objflux,atmos_wave,atmos_extinct
+    return wvega,flux_extinct,objflux,fcor,atmos_extinct
+
+################################################################################
+'''
+Do count equation
+'''
+def do_count_equation(objflux=None,collecting_area=None,sys_eff=None,atm_trans=None):
+
+    signal=collecting_area*atm_trans*_eff*objflux
+
+    return signal
 
 
-#################################################################################################
+################################################################################
 '''
 Exit code message:
 
@@ -96,7 +116,7 @@ def exit_code():
     sys.exit('Exiting the APO exposure time calculator.')
 
 
-#################################################################################################
+################################################################################
 '''
 Get collecting area
 '''
@@ -109,7 +129,7 @@ def get_collecting_area():
     return area
 
 
-#################################################################################################
+################################################################################
 '''
 Get atmospheric extinction
 '''
@@ -126,10 +146,12 @@ def get_mean_extinction(w1=None,w2=None,airmass=None):
     else:
         ext_wave=ext_wave[gd]; ext=ext[gd]
 
+    ext=ext*airmass
+
     return ext_wave,ext
 
 
-#################################################################################################
+################################################################################
 '''
 Get filter transmission
 '''
@@ -153,7 +175,7 @@ def get_filter_transmission(filt=None,w1=None,w2=None):
     return filt_wave,filt_trans
 
 
-#################################################################################################
+################################################################################
 '''
 Get detector quantum efficiency
 '''
@@ -180,7 +202,7 @@ def get_qe(instr=None,grating=None,w1=None,w2=None):
     return qe_wave,qe
 
 
-#################################################################################################
+################################################################################
 '''
 Calculates reflectivity of mirrors as a function of wavelength.
 Returns: Transmission of mirrors
@@ -209,7 +231,7 @@ def get_mirror_throughput(w1=None,w2=None):
     return alwave,alreflect
 
 
-#################################################################################################
+################################################################################
 '''
 Blackbody calculator
 
@@ -241,11 +263,12 @@ def get_blackbody_flux(teff=None,mag=None,filt=None,w1=None,w2=None,wcent=None):
     N = abscenter/uncenter                        # normalization constant
     objflux = N*unflux                           # normalized flux curve
 
+    gd = np.where((wvega>w1) & (wvega<w2))
 
-    return wave,objflux
+    return wave,objflux,wvega[gd],fvega[gd]
 
 
-#################################################################################################
+################################################################################
 '''
 Get Instrument parameters (grating, filter, gain, readnoise, and platescale)
 '''
@@ -332,7 +355,7 @@ def get_instr_params(instr=None,grating=None,filt=None):
     return instr,grating,filt,gain,readnoise,platescale
 
 
-#################################################################################################
+################################################################################
 '''
 Get observation parameters (Vmag, Teff, seeing, airmass, moonphase)
 '''
@@ -371,6 +394,7 @@ def get_obsinfo(mag=None,teff=None,seeing=None,airmass=None,moonphase=None):
             airmass=1.2
         else:
             airmass=float(airmass)
+        if airmass>4: print("Airmass = "+str(airmass)+"? That's a pretty high number...")
     else:
         if airmass>4: print("Airmass = "+str(airmass)+"? That's a pretty high number...")
     print("Ok, your target will be observed at airmass = "+str(airmass)+".")
@@ -409,7 +433,7 @@ def get_obsinfo(mag=None,teff=None,seeing=None,airmass=None,moonphase=None):
 
 
 
-#################################################################################################
+################################################################################
 '''
 Interpolator
 '''
@@ -422,24 +446,16 @@ def interp(inx,iny):
 
 
 
-#################################################################################################
-#################################################################################################
-#################################################################################################
+################################################################################
+################################################################################
+################################################################################
 # everything below here has not been incorporated into the code yet
-#################################################################################################
-#################################################################################################
-#################################################################################################
+################################################################################
+################################################################################
+################################################################################
 
 
-#################################################################################################
-'''
-Do count equation
-'''
-def do_count_equation(objflux=None,collecting_area=None,sys_eff=None,atm_trans=None):
-    signal=collecting_area*atm_trans*sys_eff*objflux
 
-
-    return signal
 
 
 #################################################################################################
