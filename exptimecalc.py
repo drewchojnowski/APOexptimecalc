@@ -54,29 +54,23 @@ def exptimecalc(instr=None,grating=None,mag=None,snr=100.0,exptime=None,
     moonphase=obsinfo[4]
 
     # get a flux-calibrated blackbody, based on V mag, teff, and vega spectrum
-    wave,objflux,wvega,fvega = get_blackbody_flux(teff=teff,mag=mag,w1=w1,w2=w2,wcent=wcent)
-#    objflux=(objflux*wave)/(h*(c*10**8))
+    wave,objflux,wvega,fvega = get_blackbody_flux(teff,mag,w1,w2,wcent)
 
     # get the throughput of 3 aluminum mirros
-    mirror_wave,mirror_trans = get_mirror_throughput(w1=w1,w2=w2)
+    mirror_wave,mirror_trans = get_mirror_throughput(w1,w2)
 
     # get the filter transmission for arctic
     if instr=='arctic':
-        filt_wave,filt_trans = get_filter_transmission(filt=filt,w1=w1,w2=w2)
+        filt_wave,filt_trans = get_filter_transmission(filt,w1,w2)
 
     # get the quantum efficiency
-    qe_wave,qe = get_qe(instr=instr,grating=grating,w1=w1,w2=w2)
+    qe_wave,qe = get_qe(instr,grating,w1,w2)
 
-    print('*'*80)
-    print(airmass)
-    print('*'*80)
     # get the mean extinction
-    atmos_wave,atmos_extinct = get_mean_extinction(w1=w1,w2=w2,airmass=airmass)
-
+    atmos_wave,atmos_extinct = get_mean_extinction(w1,w2,airmass)
+    # convert mags of extinction to flux of extinction
     flux_extinct=objflux*(10**(-0.4*atmos_extinct))
-    fcor=(flux_extinct/objflux)
 
-#    sys_eff = get_sys_eff()
 
     if instr=='dis': filt_trans=None
 #    signal=do_count_equation(wave,objflux,collecting_area,mirror_trans,
@@ -93,16 +87,6 @@ def exptimecalc(instr=None,grating=None,mag=None,snr=100.0,exptime=None,
     print('\n'+exptime+' seconds')
 
     return wvega,flux_extinct,objflux,fcor,atmos_extinct
-
-################################################################################
-'''
-Do count equation
-'''
-def do_count_equation(objflux=None,collecting_area=None,sys_eff=None,atm_trans=None):
-
-    signal=collecting_area*atm_trans*_eff*objflux
-
-    return signal
 
 
 ################################################################################
@@ -161,18 +145,18 @@ def get_filter_transmission(filt=None,w1=None,w2=None):
     filtdata=ascii.read(filtfile)
 
     # get the interpolated arrays
-    filt_wave,filt_trans = interp(filtdata['wavelength'],filtdata['transmission'])
+    fw,ft = interp(filtdata['wavelength'],filtdata['transmission'])
 
     # restrict to the specified wavelength limits
-    gd=np.where((filt_wave>=w1) & (filt_wave<w2))
+    gd=np.where((fw>=w1) & (fw<w2))
     if len(gd[0])==0:
         print('\n'+'*'*70)
         print('There is an error in get_filter_transmission.')
         exit_code()
     else:
-        filt_wave=filt_wave[gd]; filt_trans=filt_trans[gd]
+        fw=fw[gd]; ft=ft[gd]
 
-    return filt_wave,filt_trans
+    return fw,ft
 
 
 ################################################################################
@@ -235,11 +219,11 @@ def get_mirror_throughput(w1=None,w2=None):
 '''
 Blackbody calculator
 
-   Inputs:  Target's effective temperature and magnitude at a specific wavelength, the 
-            desired bandpass, and a reference flux.
-   Ouputs:  Array of wavelengths within the bandpass and the corresponding fluxes.
+Inputs:  Target's effective temperature and magnitude at a specific wavelength, 
+         the desired bandpass, and a reference flux.
+Ouputs:  Array of wavelengths within the bandpass and the corresponding fluxes.
 '''
-def get_blackbody_flux(teff=None,mag=None,filt=None,w1=None,w2=None,wcent=None):
+def get_blackbody_flux(teff=None,mag=None,w1=None,w2=None,wcent=None,filt=None):
     h = const.h.cgs.value
     c = const.c.cgs.value
     k = const.k_B.cgs.value
@@ -258,10 +242,14 @@ def get_blackbody_flux(teff=None,mag=None,filt=None,w1=None,w2=None,wcent=None):
     modwave = wave*1e-8
     unflux = (2.0*h*c**2/modwave**5) * (np.exp(h*c/(modwave*k*teff))-1.0)**(-1)
 
-    pairs = dict(zip(wave,unflux))                # combines two lists into dictionary
-    uncenter = pairs[wcent]                      # unnormalized flux at band's central wavelength
-    N = abscenter/uncenter                        # normalization constant
-    objflux = N*unflux                           # normalized flux curve
+    # combines two lists into dictionary
+    pairs = dict(zip(wave,unflux))
+    # unnormalized flux at band's central wavelength
+    uncenter = pairs[wcent]
+    # normalization constant
+    N = abscenter/uncenter
+    # normalized flux curve
+    objflux = N*unflux
 
     gd = np.where((wvega>w1) & (wvega<w2))
 
@@ -296,7 +284,7 @@ def get_instr_params(instr=None,grating=None,filt=None):
             tmp='data/filt_'+filt
             filtfile=glob.glob(tmp)
             if len(filtfile)==0:
-                print('A transmission curve file ('+tmp+') was not found for the specified filter.')
+                print('Trans. curve ('+tmp+') not found for specified filter.')
                 exit_code()
         else:
             filt_files=np.array(glob.glob('data/filt_*'))
@@ -318,7 +306,7 @@ def get_instr_params(instr=None,grating=None,filt=None):
         print('Ok, you are using the '+filt+' filter.')
 
 
-    # get dis parameters - more complicated, in case other info from DIS grating table is needed.
+    # get dis parameters
     if instr=='dis':
         # read in table of DIS grating info
         distable = ascii.read(dis_grating_file)
@@ -455,7 +443,15 @@ def interp(inx,iny):
 ################################################################################
 
 
+################################################################################
+'''
+Do count equation
+'''
+def do_count_equation(objflux=None,collecting_area=None,sys_eff=None,atm_trans=None):
 
+    signal=collecting_area*atm_trans*_eff*objflux
+
+    return signal
 
 
 #################################################################################################
